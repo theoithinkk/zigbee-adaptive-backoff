@@ -27,6 +27,7 @@
 
 #include <cmath>
 #include <deque>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <set>
@@ -73,6 +74,7 @@ struct AdaptiveState
 };
 
 static std::vector<AdaptiveState> g_ad;
+static std::ofstream g_beTrace; // --traceBE=<file>: "time_s,sensor,minBE" on every change
 
 static void
 CcaWrapper(uint32_t idx, PhyEnumeration status)
@@ -118,6 +120,10 @@ CcaWrapper(uint32_t idx, PhyEnumeration status)
                 s.csma->SetMacMinBE(nbe); // takes effect at the next CSMA/CA run
                 s.window.clear();         // require fresh evidence before next change
                 g.beChanges++;
+                if (g_beTrace.is_open())
+                {
+                    g_beTrace << now << "," << idx + 1 << "," << nbe << "\n";
+                }
             }
         }
     }
@@ -230,6 +236,7 @@ main(int argc, char* argv[])
     double lo = 0.2;
     double radius = 10.0;
     bool header = false;
+    std::string traceBE = "";
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("nSensors", "Number of sensors (N)", nSensors);
@@ -246,6 +253,8 @@ main(int argc, char* argv[])
     cmd.AddValue("lo", "Adaptive: busy fraction below which minBE--", lo);
     cmd.AddValue("radius", "Sensor circle radius [m]", radius);
     cmd.AddValue("header", "Print CSV header and exit", header);
+    cmd.AddValue("traceBE", "Write every minBE change (time_s,sensor,minBE) to this CSV file",
+                 traceBE);
     cmd.Parse(argc, argv);
 
     if (header)
@@ -302,6 +311,17 @@ main(int argc, char* argv[])
     // coordinator receive hook
     Ptr<LrWpanNetDevice> coord = devs.Get(0)->GetObject<LrWpanNetDevice>();
     coord->GetMac()->SetMcpsDataIndicationCallback(MakeCallback(&CoordRx));
+
+    if (!traceBE.empty())
+    {
+        g_beTrace.open(traceBE);
+        NS_ABORT_MSG_UNLESS(g_beTrace, "cannot open --traceBE file " << traceBE);
+        g_beTrace << "time_s,sensor,minBE\n";
+        for (uint32_t i = 1; i <= nSensors; i++)
+        {
+            g_beTrace << 0.0 << "," << i << "," << minBE << "\n"; // starting value
+        }
+    }
 
     // sensors: hooks + traffic
     g_ad.resize(nSensors);

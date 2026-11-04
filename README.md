@@ -29,9 +29,21 @@ pip install pandas scipy matplotlib
 # 3. Run
 ./ns3 run "zigbee-star --nSensors=20 --interval=0.1"                    # default settings
 ./ns3 run "zigbee-star --nSensors=20 --interval=0.1 --mode=adaptive"    # adaptive rule
-python3 run_experiments.py baseline    # or: minbe | adaptive | sensitivity | all
+python3 run_experiments.py baseline    # or: minbe | adaptive | sensitivity | trace | all
 python3 plot_results.py                # graphs -> results/plots/
 ```
+
+## Graphs (`results/plots/`)
+
+Every metric panel is labelled **↑ Higher is better** (PDR) or **↓ Lower is better** (delay, retransmissions, channel access failures).
+
+| File | Shows |
+|---|---|
+| `metrics_interval_*.png` | every configuration: default, fixed minBE 1–5, adaptive + sensitivity variants |
+| `comparison_interval_*.png` | default vs **best fixed minBE** (best of 1–5 at each N, per metric, labelled `BE=x`) vs adaptive |
+| `minbe_over_time.png` | the adaptive rule moving: each sensor's `macMinBE` over one run, plus the mean |
+
+The minBE trace comes from `--traceBE=<file>` (writes `time_s,sensor,minBE` on every change; results are unchanged).
 
 ## Repo layout
 
@@ -39,7 +51,7 @@ python3 plot_results.py                # graphs -> results/plots/
 scratch/zigbee-star.cc   simulation scenario
 run_experiments.py       parameter sweeps (10 runs each)
 plot_results.py          mean ± 95% CI graphs + summary.csv
-results/                 CSVs and plots
+results/                 CSVs and plots (traces/ = minBE-over-time logs)
 DETAILS.md               full notes: code-to-proposal mapping, assumptions, preliminary results
 ```
 
@@ -47,5 +59,6 @@ DETAILS.md               full notes: code-to-proposal mapping, assumptions, prel
 
 - [x] Star network + baseline (Milestone 2)
 - [x] Adaptive rule (no changes to the lr-wpan module needed)
-- [ ] minBE 1–5 sweep, sensitivity test
+- [x] minBE 1–5 sweep, sensitivity test
+- [x] Best-fixed comparison, minBE-over-time trace
 - [ ] Final paper

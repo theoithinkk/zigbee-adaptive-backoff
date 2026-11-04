@@ -30,8 +30,11 @@ pip install pandas scipy matplotlib
 ```bash
 ./ns3 run "zigbee-star --nSensors=20 --interval=0.1 --minBE=3 --run=1"
 ./ns3 run "zigbee-star --nSensors=20 --interval=0.1 --mode=adaptive --window=10 --hi=0.5 --lo=0.2"
+./ns3 run "zigbee-star --mode=adaptive --nSensors=30 --interval=0.1 --traceBE=$PWD/minbe.csv"  # log every minBE change
 ./ns3 run "zigbee-star --PrintHelp"     # list all parameters
 ```
+
+`--traceBE` writes `time_s,sensor,minBE`: one row per sensor at t=0 (the start value), then one row per change. It only logs; the CSV result row is identical with or without it. Use an absolute path, since `./ns3 run` may not run from the folder you're in.
 
 ## Run the experiments + graphs
 
@@ -40,6 +43,7 @@ python3 run_experiments.py baseline      # Experiment 1 (default settings, N = 5
 python3 run_experiments.py minbe         # Experiment 2 (macMinBE = 1..5)
 python3 run_experiments.py adaptive      # Experiment 3 (adaptive rule)
 python3 run_experiments.py sensitivity   # Experiment 4 (W = 5/10/20, thresholds ±0.1)
+python3 run_experiments.py trace         # minBE over time: 1 adaptive run each for (N, interval) in TRACE_CASES
 python3 plot_results.py
 ```
 
@@ -91,4 +95,31 @@ What we see so far:
 - The baseline matches the hypothesis. Under heavy traffic, PDR falls from 100% (N=5) to about 67% (N=50), delay goes up, and channel access failures take over as the main cause of loss.
 - Small networks: the adaptive rule cuts delay by about 40% (minBE drops toward 0–2).
 - Mid-size networks (N=20–30, heavy): the adaptive rule raises PDR a little (+1.6 points at N=30), with fewer retransmissions and channel access failures, but delay is higher.
-- N ≥ 40, heavy: the channel is saturated, so no backoff setting helps much. The adaptive rule pushes minBE up to macMaxBE (5), which adds delay but barely changes PDR. Next, compare it with the *best fixed* minBE (`minbe` sweep), and maybe also adapt macMaxBE or macMaxCSMABackoffs.
+- N ≥ 40, heavy: the channel is saturated, so no backoff setting helps much. The adaptive rule pushes minBE up to macMaxBE (5), which adds delay but barely changes PDR.
+
+## Best fixed minBE vs adaptive — see `comparison_interval_*.png`
+
+"Best fixed" picks, at each N and for each metric separately, whichever of minBE = 1–5 scored best. That's an oracle: nobody could choose it without running all five first, so it is the toughest fair baseline for the adaptive rule.
+
+| Traffic | N | PDR best fixed (minBE) | PDR adaptive | Delay best fixed (minBE) | Delay adaptive | Delay default |
+|---|---|---|---|---|---|---|
+| light 1 s | 5 | 100.00 | 100.00 | 1.66 (1) | 1.56 | 2.62 |
+| light 1 s | 50 | 100.00 (5) | 99.99 | 1.95 (1) | 1.91 | 3.06 |
+| heavy 0.1 s | 20 | 99.51 (5) | 99.66 | 2.98 (1) | 4.03 | 4.98 |
+| heavy 0.1 s | 30 | 95.22 (5) | 96.01 | 4.27 (1) | 12.25 | 7.65 |
+| heavy 0.1 s | 50 | 66.85 (5) | 66.94 | 6.15 (1) | 21.50 | 12.92 |
+
+- Light traffic: adaptive matches or slightly beats the best fixed delay (minBE=1) without being told the load.
+- Heavy traffic: adaptive gets PDR at least as high as the best fixed minBE at every N, but its delay is 2–3.5× the best fixed delay and worse than the default once N ≥ 30.
+- The best minBE depends on the metric: minBE=1 always gives the lowest delay, while minBE=5 gives the highest PDR under heavy load. The rule only follows channel busyness, so under heavy load it settles on the PDR-friendly end.
+
+## minBE over time — see `minbe_over_time.png`
+
+Run 1 of the adaptive rule, from `results/traces/`:
+
+- N=20, light: every sensor steps 3 → 2 → 1 → 0 within about 30 s and stays at 0. That's 60 changes in total (3 per sensor).
+- N=10, heavy: drops quickly, then keeps moving; the mean hovers around 0.5, while individual sensors jump between 0 and 4.
+- N=30, heavy: rises to 4–5 within a few seconds, mean ≈ 4.6, with constant 4↔5 switching (2,964 changes in 300 s).
+- N=50, heavy: goes straight to macMaxBE (5) and stays there (192 changes).
+
+So the rule does respond to load, in the direction the design intends. The heavy-traffic delay cost above comes from it settling at minBE 4–5.
