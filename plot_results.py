@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Makes the line graphs (mean +/- 95% CI over runs) from results/*.csv.
-    python3 plot_results.py            -> results/plots/*.png + results/summary.csv
+    python3 plot_results.py            -> results/plots/*.png + results/summary.csv + results/significance.csv
 
 Graphs:
     metrics_interval_*.png     every configuration
     comparison_interval_*.png  Default vs best fixed minBE (picked per N and metric) vs Adaptive
     minbe_over_time.png        adaptive minBE per sensor over time (needs `run_experiments.py trace`)
 """
-import glob, os, re
+import glob, os, re, warnings
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
@@ -63,7 +63,56 @@ def best_fixed(sub, m):
     return best
 
 
-def plot_comparison(sub, it):
+def welch_p(x, y):
+    """Two-sided Welch t-test p-value; runs with no spread (e.g. PDR 100 in every run) are compared exactly."""
+    if x.std() == 0 and y.std() == 0:
+        return 1.0 if x.mean() == y.mean() else 0.0
+    with warnings.catch_warnings():  # near-identical runs (PDR 99.99..100) only trigger a precision notice
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return stats.ttest_ind(x, y, equal_var=False).pvalue
+
+
+def holm(p):
+    """Holm-Bonferroni adjusted p-values (controls the chance of any false positive over all tests)."""
+    order = p.sort_values().index
+    adj, running = pd.Series(index=p.index, dtype=float), 0.0
+    for k, i in enumerate(order):
+        running = max(running, min(1.0, (len(p) - k) * p[i]))
+        adj[i] = running
+    return adj
+
+
+def significance(df):
+    """Adaptive vs default and vs best fixed minBE, per interval, N and metric, from the raw runs."""
+    fixed = df[df["config"].str.startswith(("Fixed", "Default"))]
+    rows = []
+    for (it, n), grp in df.groupby(["interval", "N"]):
+        ad, de = grp[grp["config"] == ADAPTIVE], grp[grp["config"] == DEFAULT]
+        fx = fixed[(fixed["interval"] == it) & (fixed["N"] == n)]
+        if ad.empty or de.empty or fx.empty:
+            continue
+        for m, _ in METRICS:
+            means = fx.groupby("config")[m].mean()
+            best = means.idxmax() if m in HIGHER_IS_BETTER else means.idxmin()
+            bf = fx[fx["config"] == best]
+            rows.append(dict(interval=it, N=n, metric=m,
+                             adaptive=ad[m].mean(), default=de[m].mean(), p_vs_default=welch_p(ad[m], de[m]),
+                             best_minBE=int(re.search(r"minBE=(\d)", best).group(1)),
+                             best_fixed=bf[m].mean(), p_vs_best=welch_p(ad[m], bf[m])))
+    sig = pd.DataFrame(rows)
+    if sig.empty:
+        return sig
+    both = holm(pd.concat([sig["p_vs_default"], sig["p_vs_best"]], ignore_index=True))
+    sig["p_vs_default_holm"] = both.iloc[:len(sig)].values
+    sig["p_vs_best_holm"] = both.iloc[len(sig):].values
+    return sig
+
+
+def stars(p, mark):
+    return mark * 2 if p < 0.01 else mark if p < 0.05 else ""
+
+
+def plot_comparison(sub, it, sig):
     fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     for ax, (m, title) in zip(axes.flat, METRICS):
         lines = [(DEFAULT, sub[sub["config"] == DEFAULT], dict(color="gray")),
@@ -74,13 +123,23 @@ def plot_comparison(sub, it):
         for _, r in lines[1][1].iterrows():  # which minBE won at each N
             ax.annotate(f"BE={r['minBE']}", (r["N"], r[m]), textcoords="offset points",
                         xytext=(0, 7), ha="center", fontsize=7)
+        ad = lines[2][1].set_index("N")[m]
+        for _, s in sig[(sig["interval"] == it) & (sig["metric"] == m)].iterrows():
+            mark = stars(s["p_vs_default"], "†") + stars(s["p_vs_best"], "*")
+            if mark and s["N"] in ad.index:  # significance of adaptive vs default (†) and vs best fixed (*)
+                ax.annotate(mark, (s["N"], ad[s["N"]]), textcoords="offset points", xytext=(0, -15),
+                            ha="center", fontsize=9, color="tab:red", fontweight="bold")
         ax.set_xlabel("Number of sensors (N)")
         ax.set_ylabel(title)
         ax.grid(alpha=0.3)
         better_title(ax, m)
     axes[0, 0].legend(fontsize=8)
     fig.suptitle(f"Default vs best fixed vs adaptive — {traffic_name(it)} traffic, mean ± 95% CI")
-    fig.tight_layout()
+    fig.text(0.5, 0.008, "Red marks under adaptive points: † differs from default, * differs from best fixed "
+             "(Welch t-test over the runs; single mark p < 0.05, double p < 0.01).\n"
+             "Holm-corrected p-values for all tests: results/significance.csv",
+             ha="center", fontsize=8, color="dimgray")
+    fig.tight_layout(rect=(0, 0.035, 1, 1))
     out = f"results/plots/comparison_interval_{interval_tag(it)}.png"
     fig.savefig(out, dpi=150)
     print("saved", out)
@@ -127,7 +186,7 @@ def plot_minbe_traces():
 
 def main():
     files = glob.glob("results/*.csv")
-    files = [f for f in files if not f.endswith("summary.csv")]
+    files = [f for f in files if not f.endswith(("summary.csv", "significance.csv"))]
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
     df["config"] = df.apply(label, axis=1)
     df = df.drop_duplicates(subset=["config", "N", "interval", "run"])
@@ -142,6 +201,9 @@ def main():
         rows.append(r)
     summ = pd.DataFrame(rows).sort_values(["interval", "config", "N"])
     summ.to_csv("results/summary.csv", index=False)
+    sig = significance(df)
+    if not sig.empty:
+        sig.sort_values(["interval", "metric", "N"]).to_csv("results/significance.csv", index=False)
 
     os.makedirs("results/plots", exist_ok=True)
     for it in sorted(summ["interval"].unique(), reverse=True):
@@ -162,7 +224,7 @@ def main():
         print("saved", out)
 
         if {DEFAULT, ADAPTIVE} <= set(sub["config"]) and sub["config"].str.startswith("Fixed").any():
-            plot_comparison(sub, it)
+            plot_comparison(sub, it, sig)
 
     plot_minbe_traces()
 
