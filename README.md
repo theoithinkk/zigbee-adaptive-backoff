@@ -169,7 +169,7 @@ cd ~/ns3
    ```
 2. **Get the `zs` helper (once).** Each run prints one CSV row. `./zs` runs the scenario and prints each value on its own line with a plain-English label, its unit, and the CSV column name in brackets.
    ```bash
-   cp ~/zigbee-adaptive-backoff/zs . && chmod +x zs
+   git -C ~/zigbee-adaptive-backoff pull && cp ~/zigbee-adaptive-backoff/zs . && chmod +x zs
    ```
 3. **List the parameters.** Every proposal setting (N, interval, minBE, retries, window, thresholds) is a command-line flag.
    ```bash
